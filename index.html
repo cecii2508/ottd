@@ -3,91 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vue Firebase 虛擬衣櫥</title>
+    <title>AI 自動去背衣櫥 - Vue & Firebase</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@imgly/background-removal@latest/dist/index.js"></script>
+    
     <style>
-        :root {
-            --primary: #6c5ce7;
-            --bg: #f0f2f5;
-        }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 40px; }
-        #app { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); width: 100%; max-width: 500px; text-align: center; }
+        :root { --primary: #00b894; --bg: #f5f6fa; }
+        body { font-family: sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 20px; }
+        #app { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); width: 100%; max-width: 450px; text-align: center; }
         
-        /* 預覽區域：層疊核心邏輯 */
+        /* 預覽區 */
         .preview-box {
-            position: relative;
-            width: 300px;
-            height: 450px;
-            background: #fff;
-            border: 2px solid #eee;
-            margin: 0 auto 20px;
-            border-radius: 10px;
-            overflow: hidden;
+            position: relative; width: 100%; height: 400px; background: #fff;
+            border: 2px solid #dfe6e9; margin-bottom: 20px; border-radius: 15px; overflow: hidden;
+            background-image: radial-gradient(#dcdde1 1px, transparent 1px); background-size: 20px 20px; /* 棋盤格背景 */
         }
-        .layer {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            object-fit: contain;
-            transition: opacity 0.3s ease;
-        }
-        /* Z-index 層級控制 */
-        .layer-bottom { z-index: 10; }
-        .layer-top    { z-index: 20; }
-        .layer-outer  { z-index: 30; }
+        .layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; transition: all 0.4s ease; }
+        .layer-bottom { z-index: 1; }
+        .layer-top    { z-index: 2; }
+        .layer-outer  { z-index: 3; }
 
-        /* 按鈕樣式 */
-        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-        .upload-label {
-            background: #f8f9fa; border: 1px dashed #ccc; padding: 10px;
-            border-radius: 8px; cursor: pointer; font-size: 14px;
+        /* 控制區 */
+        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .upload-btn {
+            background: #fff; border: 2px solid #eee; padding: 12px; border-radius: 10px;
+            cursor: pointer; font-size: 14px; transition: 0.2s;
         }
-        .upload-label:hover { background: #e9ecef; }
+        .upload-btn:hover { border-color: var(--primary); color: var(--primary); }
         .random-btn {
-            width: 100%; padding: 15px; background: var(--primary);
-            color: white; border: none; border-radius: 8px;
-            font-size: 18px; cursor: pointer; margin-top: 10px;
+            grid-column: span 2; padding: 15px; background: var(--primary);
+            color: white; border: none; border-radius: 10px; font-size: 16px; cursor: pointer; font-weight: bold;
         }
-        .random-btn:active { transform: scale(0.98); }
         
-        .status { font-size: 12px; color: #888; margin-top: 10px; }
-        .loading-overlay {
+        /* 載入中遮罩 */
+        .loader-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255,255,255,0.7); display: flex; align-items: center;
-            justify-content: center; z-index: 100;
+            background: rgba(0,0,0,0.8); color: white; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 999;
         }
+        .spinner { border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid #fff; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
 <div id="app">
-    <div v-if="loading" class="loading-overlay">處理中...</div>
-    
-    <h2>👔 虛擬試衣間</h2>
+    <div v-if="loading" class="loader-overlay">
+        <div class="spinner"></div>
+        <p>{{ loadingText }}</p>
+        <small style="opacity: 0.7;">(首次使用 AI 模型下載需時較久)</small>
+    </div>
+
+    <h2>✨ AI 自動去背衣櫥</h2>
 
     <div class="preview-box">
         <img v-if="current.bottom" :src="current.bottom" class="layer layer-bottom">
         <img v-if="current.top" :src="current.top" class="layer layer-top">
         <img v-if="current.outer" :src="current.outer" class="layer layer-outer">
-        <div v-if="!current.top && !current.bottom" style="margin-top: 200px; color: #ccc;">請上傳服飾</div>
+        <p v-if="!current.top && !current.bottom" style="margin-top: 180px; color: #b2bec3;">請上傳衣服照片</p>
     </div>
 
     <div class="btn-group">
-        <label class="upload-label">
-            ➕ 上傳上衣 <input type="file" @change="uploadImage($event, 'top')" hidden accept="image/*">
-        </label>
-        <label class="upload-label">
-            ➕ 上傳下身 <input type="file" @change="uploadImage($event, 'bottom')" hidden accept="image/*">
-        </label>
-        <label class="upload-label" style="grid-column: span 2;">
-            ➕ 上傳外套 <input type="file" @change="uploadImage($event, 'outer')" hidden accept="image/*">
-        </label>
-    </div>
-
-    <button class="random-btn" @click="shuffle">🔀 隨機搭配</button>
-
-    <div class="status">
-        庫存：上衣 {{db.top.length}} | 下身 {{db.bottom.length}} | 外套 {{db.outer.length}}
+        <label class="upload-btn">👕 上傳上衣 <input type="file" @change="processAndUpload($event, 'top')" hidden></label>
+        <label class="upload-btn">👖 上傳下身 <input type="file" @change="processAndUpload($event, 'bottom')" hidden></label>
+        <label class="upload-btn" style="grid-column: span 2;">🧥 上傳外套 <input type="file" @change="processAndUpload($event, 'outer')" hidden></label>
+        <button class="random-btn" @click="shuffle">🔀 隨機搭配</button>
     </div>
 </div>
 
@@ -96,7 +76,6 @@
     import { getStorage, ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
     import { getFirestore, collection, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-    // --- 請填入你的 Firebase Config ---
     const firebaseConfig = {
     apiKey: "AIzaSyBA44Q62x-jTLyf4-DEkBCjyNrAY-5DzpA",
     authDomain: "ottd-69b50.firebaseapp.com",
@@ -106,7 +85,6 @@
     appId: "1:200180859742:web:773d89e3babcb69cc285cf",
     measurementId: "G-YP5C2493RY"
   };
-
     const app = initializeApp(firebaseConfig);
     const storage = getStorage(app);
     const fstore = getFirestore(app);
@@ -118,60 +96,64 @@
             const db = ref({ top: [], bottom: [], outer: [] });
             const current = ref({ top: null, bottom: null, outer: null });
             const loading = ref(false);
+            const loadingText = ref("");
 
-            // 初始化：從 Firestore 抓取現有資料
-            const loadData = async () => {
+            onMounted(async () => {
                 const querySnapshot = await getDocs(collection(fstore, "wardrobe"));
-                querySnapshot.forEach((doc) => {
-                    const item = doc.data();
-                    if (db.value[item.type]) {
-                        db.value[item.type].push(item.url);
-                    }
+                querySnapshot.forEach(doc => {
+                    const data = doc.data();
+                    db.value[data.type].push(data.url);
                 });
-            };
+            });
 
-            onMounted(loadData);
-
-            // 上傳邏輯
-            const uploadImage = async (event, type) => {
+            // 核心功能：AI 去背並上傳
+            const processAndUpload = async (event, type) => {
                 const file = event.target.files[0];
                 if (!file) return;
 
                 loading.value = true;
-                try {
-                    // 1. 上傳 Storage
-                    const storagePath = sRef(storage, `clothes/${Date.now()}_${file.name}`);
-                    const snapshot = await uploadBytes(storagePath, file);
-                    const url = await getDownloadURL(snapshot.ref);
+                loadingText.value = "AI 正在去背中...";
 
-                    // 2. 存入 Firestore
-                    await addDoc(collection(fstore, "wardrobe"), {
-                        url: url,
-                        type: type,
-                        createdAt: new Date()
+                try {
+                    // 1. AI 去背處理 (會自動轉為 PNG)
+                    // imglyRemoveBackground 會返回一個 Blob (PNG 格式)
+                    const processedBlob = await imglyRemoveBackground(file, {
+                        model: 'medium', // 可選 'small' 以加快速度但品質略降
+                        output: { format: 'image/png', quality: 0.8 }
                     });
 
-                    // 3. 更新本地狀態
+                    loadingText.value = "正在上傳雲端...";
+
+                    // 2. 上傳至 Firebase Storage
+                    const storagePath = sRef(storage, `clothes/${Date.now()}.png`);
+                    const snapshot = await uploadBytes(storagePath, processedBlob);
+                    const url = await getDownloadURL(snapshot.ref);
+
+                    // 3. 存入 Firestore
+                    await addDoc(collection(fstore, "wardrobe"), {
+                        url, type, createdAt: new Date()
+                    });
+
                     db.value[type].push(url);
                     current.value[type] = url;
-                    
+
                 } catch (e) {
                     console.error(e);
-                    alert("上傳失敗，請檢查 Firebase 設定與權限");
+                    alert("去背或上傳失敗，請檢查網路狀況");
                 } finally {
                     loading.value = false;
+                    event.target.value = '';
                 }
             };
 
-            // 隨機邏輯
             const shuffle = () => {
-                const getRandom = (arr) => arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : null;
-                current.value.top = getRandom(db.value.top);
-                current.value.bottom = getRandom(db.value.bottom);
-                current.value.outer = getRandom(db.value.outer);
+                const rand = (arr) => arr.length ? arr[Math.floor(Math.random() * arr.length)] : null;
+                current.value.top = rand(db.value.top);
+                current.value.bottom = rand(db.value.bottom);
+                current.value.outer = rand(db.value.outer);
             };
 
-            return { db, current, loading, uploadImage, shuffle };
+            return { db, current, loading, loadingText, processAndUpload, shuffle };
         }
     }).mount('#app');
 </script>
