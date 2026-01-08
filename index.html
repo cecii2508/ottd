@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vue Firebase 虛擬衣櫥</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        :root {
+            --primary: #6c5ce7;
+            --bg: #f0f2f5;
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 40px; }
+        #app { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); width: 100%; max-width: 500px; text-align: center; }
+        
+        /* 預覽區域：層疊核心邏輯 */
+        .preview-box {
+            position: relative;
+            width: 300px;
+            height: 450px;
+            background: #fff;
+            border: 2px solid #eee;
+            margin: 0 auto 20px;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            object-fit: contain;
+            transition: opacity 0.3s ease;
+        }
+        /* Z-index 層級控制 */
+        .layer-bottom { z-index: 10; }
+        .layer-top    { z-index: 20; }
+        .layer-outer  { z-index: 30; }
+
+        /* 按鈕樣式 */
+        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .upload-label {
+            background: #f8f9fa; border: 1px dashed #ccc; padding: 10px;
+            border-radius: 8px; cursor: pointer; font-size: 14px;
+        }
+        .upload-label:hover { background: #e9ecef; }
+        .random-btn {
+            width: 100%; padding: 15px; background: var(--primary);
+            color: white; border: none; border-radius: 8px;
+            font-size: 18px; cursor: pointer; margin-top: 10px;
+        }
+        .random-btn:active { transform: scale(0.98); }
+        
+        .status { font-size: 12px; color: #888; margin-top: 10px; }
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.7); display: flex; align-items: center;
+            justify-content: center; z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div v-if="loading" class="loading-overlay">處理中...</div>
+    
+    <h2>👔 虛擬試衣間</h2>
+
+    <div class="preview-box">
+        <img v-if="current.bottom" :src="current.bottom" class="layer layer-bottom">
+        <img v-if="current.top" :src="current.top" class="layer layer-top">
+        <img v-if="current.outer" :src="current.outer" class="layer layer-outer">
+        <div v-if="!current.top && !current.bottom" style="margin-top: 200px; color: #ccc;">請上傳服飾</div>
+    </div>
+
+    <div class="btn-group">
+        <label class="upload-label">
+            ➕ 上傳上衣 <input type="file" @change="uploadImage($event, 'top')" hidden accept="image/*">
+        </label>
+        <label class="upload-label">
+            ➕ 上傳下身 <input type="file" @change="uploadImage($event, 'bottom')" hidden accept="image/*">
+        </label>
+        <label class="upload-label" style="grid-column: span 2;">
+            ➕ 上傳外套 <input type="file" @change="uploadImage($event, 'outer')" hidden accept="image/*">
+        </label>
+    </div>
+
+    <button class="random-btn" @click="shuffle">🔀 隨機搭配</button>
+
+    <div class="status">
+        庫存：上衣 {{db.top.length}} | 下身 {{db.bottom.length}} | 外套 {{db.outer.length}}
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getStorage, ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+    import { getFirestore, collection, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    // --- 請填入你的 Firebase Config ---
+    const firebaseConfig = {
+    apiKey: "AIzaSyBA44Q62x-jTLyf4-DEkBCjyNrAY-5DzpA",
+    authDomain: "ottd-69b50.firebaseapp.com",
+    projectId: "ottd-69b50",
+    storageBucket: "ottd-69b50.firebasestorage.app",
+    messagingSenderId: "200180859742",
+    appId: "1:200180859742:web:773d89e3babcb69cc285cf",
+    measurementId: "G-YP5C2493RY"
+  };
+
+    const app = initializeApp(firebaseConfig);
+    const storage = getStorage(app);
+    const fstore = getFirestore(app);
+
+    const { createApp, ref, onMounted } = Vue;
+
+    createApp({
+        setup() {
+            const db = ref({ top: [], bottom: [], outer: [] });
+            const current = ref({ top: null, bottom: null, outer: null });
+            const loading = ref(false);
+
+            // 初始化：從 Firestore 抓取現有資料
+            const loadData = async () => {
+                const querySnapshot = await getDocs(collection(fstore, "wardrobe"));
+                querySnapshot.forEach((doc) => {
+                    const item = doc.data();
+                    if (db.value[item.type]) {
+                        db.value[item.type].push(item.url);
+                    }
+                });
+            };
+
+            onMounted(loadData);
+
+            // 上傳邏輯
+            const uploadImage = async (event, type) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                loading.value = true;
+                try {
+                    // 1. 上傳 Storage
+                    const storagePath = sRef(storage, `clothes/${Date.now()}_${file.name}`);
+                    const snapshot = await uploadBytes(storagePath, file);
+                    const url = await getDownloadURL(snapshot.ref);
+
+                    // 2. 存入 Firestore
+                    await addDoc(collection(fstore, "wardrobe"), {
+                        url: url,
+                        type: type,
+                        createdAt: new Date()
+                    });
+
+                    // 3. 更新本地狀態
+                    db.value[type].push(url);
+                    current.value[type] = url;
+                    
+                } catch (e) {
+                    console.error(e);
+                    alert("上傳失敗，請檢查 Firebase 設定與權限");
+                } finally {
+                    loading.value = false;
+                }
+            };
+
+            // 隨機邏輯
+            const shuffle = () => {
+                const getRandom = (arr) => arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : null;
+                current.value.top = getRandom(db.value.top);
+                current.value.bottom = getRandom(db.value.bottom);
+                current.value.outer = getRandom(db.value.outer);
+            };
+
+            return { db, current, loading, uploadImage, shuffle };
+        }
+    }).mount('#app');
+</script>
+
+</body>
+</html>
